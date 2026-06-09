@@ -1,0 +1,473 @@
+<?php
+error_reporting(0);
+ini_set('display_errors', 0);
+session_start();
+
+$mikoa = [
+    "Arusha", "Dar es Salaam", "Dodoma", "Geita", "Iringa", "Kagera", "Katavi", "Kigoma", 
+    "Kilimanjaro", "Lindi", "Manyara", "Mara", "Mbeya", "Morogoro", "Mtwara", "Mwanza", 
+    "Njombe", "Pemba Kaskazini", "Pemba Kusini", "Pwani", "Rukwa", "Ruvuma", "Shinyanga", 
+    "Simiyu", "Singida", "Songwe", "Tabora", "Tanga", "Unguja Kaskazini", "Unguja Kusini", "Mjini Magharibi"
+];
+
+try {
+    $pdo = new PDO("mysql:host=localhost", "root", "", [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+    ]);
+    $pdo->exec("CREATE DATABASE IF NOT EXISTS bus_booking_db");
+    $pdo->exec("USE bus_booking_db");
+    
+    $pdo->exec("CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(50) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        phone VARCHAR(20) NOT NULL,
+        role ENUM('admin', 'agent', 'passenger') NOT NULL
+    )");
+    
+    $pdo->exec("CREATE TABLE IF NOT EXISTS buses (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        bus_number VARCHAR(20) UNIQUE NOT NULL,
+        company_name VARCHAR(100) NOT NULL,
+        total_seats INT NOT NULL
+    )");
+    
+    $pdo->exec("CREATE TABLE IF NOT EXISTS routes (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        departure VARCHAR(100) NOT NULL,
+        destination VARCHAR(100) NOT NULL
+    )");
+    
+    $pdo->exec("CREATE TABLE IF NOT EXISTS schedules (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        bus_id INT,
+        route_id INT,
+        travel_date DATE NOT NULL,
+        travel_time TIME NOT NULL,
+        price DECIMAL(10,2) NOT NULL,
+        FOREIGN KEY (bus_id) REFERENCES buses(id) ON DELETE CASCADE,
+        FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE
+    )");
+    
+    $pdo->exec("CREATE TABLE IF NOT EXISTS tickets (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        schedule_id INT,
+        passenger_name VARCHAR(100) NOT NULL,
+        passenger_phone VARCHAR(20) NOT NULL,
+        seat_number INT NOT NULL,
+        ticket_number VARCHAR(50) UNIQUE NOT NULL,
+        payment_method VARCHAR(50) NOT NULL,
+        transaction_id VARCHAR(100) NOT NULL,
+        payment_status ENUM('Paid', 'Unpaid') DEFAULT 'Unpaid',
+        FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE
+    )");
+
+    $stmt = $pdo->query("SELECT COUNT(*) FROM users WHERE username = 'admin'");
+    if ($stmt->fetchColumn() == 0) {
+        $hash = password_hash('admin123', PASSWORD_BCRYPT);
+        $pdo->exec("INSERT INTO users (username, password, phone, role) VALUES ('admin', '$hash', '0700000000', 'admin')");
+    }
+} catch (PDOException $e) {
+    die("Database Error: " . $e->getMessage());
+}
+
+$msg = "";
+$action = $_GET['action'] ?? 'home';
+
+if (isset($_POST['register'])) {
+    $u = trim($_POST['username']);
+    $p = password_hash($_POST['password'], PASSWORD_BCRYPT);
+    $ph = trim($_POST['phone']);
+    $r = $_POST['role'];
+    try {
+        $stmt = $pdo->prepare("INSERT INTO users (username, password, phone, role) VALUES (?, ?, ?, ?)");
+        $stmt->execute([$u, $p, $ph, $r]);
+        $msg = "<div class='alert alert-success'>Usajili umefanikiwa! Ingia sasa.</div>";
+        $action = 'login';
+    } catch (PDOException $e) {
+        $msg = "<div class='alert alert-danger'>Jina la mtumiaji tayari lipo.</div>";
+    }
+}
+
+if (isset($_POST['login'])) {
+    $u = trim($_POST['username']);
+    $p = $_POST['password'];
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ?");
+    $stmt->execute([$u]);
+    $user = $stmt->fetch();
+    if ($user && password_verify($p, $user['password'])) {
+        $_SESSION['user_id'] = $user['id'];
+        $_SESSION['username'] = $user['username'];
+        $_SESSION['phone'] = $user['phone'];
+        $_SESSION['role'] = $user['role'];
+        header("Location: " . $_SERVER['PHP_SELF']);
+        exit;
+    } else {
+        $msg = "<div class='alert alert-danger'>Taarifa zisizo sahihi.</div>";
+    }
+}
+
+if (isset($_GET['logout'])) {
+    session_destroy();
+    header("Location: " . $_SERVER['PHP_SELF']);
+    exit;
+}
+
+if (isset($_SESSION['role']) && $_SESSION['role'] == 'admin') {
+    if (isset($_POST['add_bus'])) {
+        $stmt = $pdo->prepare("INSERT INTO buses (bus_number, company_name, total_seats) VALUES (?, ?, ?)");
+        $stmt->execute([$_POST['bus_number'], $_POST['company_name'], $_POST['total_seats']]);
+    }
+    if (isset($_GET['delete_bus'])) {
+        $stmt = $pdo->prepare("DELETE FROM buses WHERE id = ?");
+        $stmt->execute([$_GET['delete_bus']]);
+    }
+    if (isset($_POST['add_route'])) {
+        $stmt = $pdo->prepare("INSERT INTO routes (departure, destination) VALUES (?, ?)");
+        $stmt->execute([$_POST['departure'], $_POST['destination']]);
+    }
+    if (isset($_GET['delete_route'])) {
+        $stmt = $pdo->prepare("DELETE FROM routes WHERE id = ?");
+        $stmt->execute([$_GET['delete_route']]);
+    }
+    if (isset($_POST['add_schedule'])) {
+        $stmt = $pdo->prepare("INSERT INTO schedules (bus_id, route_id, travel_date, travel_time, price) VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([$_POST['bus_id'], $_POST['route_id'], $_POST['travel_date'], $_POST['travel_time'], $_POST['price']]);
+    }
+    if (isset($_GET['delete_schedule'])) {
+        $stmt = $pdo->prepare("DELETE FROM schedules WHERE id = ?");
+        $stmt->execute([$_GET['delete_schedule']]);
+    }
+}
+
+if (isset($_POST['book_ticket'])) {
+    $sid = $_POST['schedule_id'];
+    $name = $_POST['passenger_name'];
+    $phone = $_POST['passenger_phone'];
+    $seat = $_POST['seat_number'];
+    $pm = $_POST['payment_method'];
+    $tx = trim($_POST['transaction_id']);
+    $t_num = "TK-" . strtoupper(uniqid());
+    $p_status = (!empty($tx)) ? 'Paid' : 'Unpaid';
+    
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM tickets WHERE schedule_id = ? AND seat_number = ?");
+    $stmt->execute([$sid, $seat]);
+    if ($stmt->fetchColumn() > 0) {
+        $msg = "<div class='alert alert-danger'>Kiti namba $seat tayari kimechukuliwa!</div>";
+    } else {
+        $stmt = $pdo->prepare("INSERT INTO tickets (schedule_id, passenger_name, passenger_phone, seat_number, ticket_number, payment_method, transaction_id, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt->execute([$sid, $name, $phone, $seat, $t_num, $pm, $tx, $p_status]);
+        $msg = "<div class='alert alert-success'>Tiketi imekatwa kikamilifu! Namba ya Tiketi: $t_num (" . ($p_status == 'Paid' ? 'Imelipwa' : 'Inasubiri Malipo') . ")</div>";
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="sw">
+<head>
+    <meta charset="UTF-8">
+    <title>Mfumo wa Kukata Tiketi za Mabasi</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+    <div class="container">
+        <a class="navbar-brand" href="?action=home">BusTicket</a>
+        <div class="collapse navbar-collapse">
+            <ul class="navbar-nav me-auto">
+                <li class="nav-item"><a class="nav-link" href="?action=home">Nyumbani</a></li>
+                <?php if (isset($_SESSION['user_id'])): ?>
+                    <li class="nav-item"><a class="nav-link" href="?action=dashboard">Dashboard</a></li>
+                    <?php if ($_SESSION['role'] == 'admin'): ?>
+                        <li class="nav-item"><a class="nav-link" href="?action=buses">Mabasi</a></li>
+                        <li class="nav-item"><a class="nav-link" href="?action=routes">Njia</a></li>
+                        <li class="nav-item"><a class="nav-link" href="?action=schedules">Ratiba</a></li>
+                        <li class="nav-item"><a class="nav-link" href="?action=reports">Ripoti</a></li>
+                    <?php endif; ?>
+                <?php endif; ?>
+            </ul>
+            <div class="d-flex text-white align-items-center">
+                <?php if (isset($_SESSION['user_id'])): ?>
+                    <span class="me-3">Habari, <?= htmlspecialchars($_SESSION['username']) ?> (<?= $_SESSION['role'] ?>)</span>
+                    <a href="?logout=1" class="btn btn-danger btn-sm">Ondoka</a>
+                <?php else: ?>
+                    <a href="?action=login" class="btn btn-outline-light btn-sm me-2">Ingia</a>
+                    <a href="?action=register" class="btn btn-light btn-sm">Sajili</a>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<div class="container">
+    <?= $msg ?>
+
+    <?php if ($action == 'home' || isset($_POST['search_safari'])): ?>
+        <div class="card p-4 mb-4 shadow-sm">
+            <h4>Tafuta Safari Yako</h4>
+            <form method="POST" class="row g-3">
+                <div class="col-md-4">
+                    <select name="dep" class="form-select" required>
+                        <option value="">Kutoka (Mkoa)</option>
+                        <?php foreach($mikoa as $m) echo "<option value='$m'>$m</option>"; ?>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <select name="dest" class="form-select" required>
+                        <option value="">Kwenda (Mkoa)</option>
+                        <?php foreach($mikoa as $m) echo "<option value='$m'>$m</option>"; ?>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <button type="submit" name="search_safari" class="btn btn-primary w-100">Tafuta</button>
+                </div>
+            </form>
+        </div>
+
+        <h3>Ratiba Zinazopatikana</h3>
+        <div class="row">
+            <?php
+            $sql = "SELECT s.*, b.company_name, b.bus_number, r.departure, r.destination FROM schedules s 
+                    JOIN buses b ON s.bus_id = b.id JOIN routes r ON s.route_id = r.id";
+            if (isset($_POST['search_safari'])) {
+                $sql .= " WHERE r.departure = ? AND r.destination = ?";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute([$_POST['dep'], $_POST['dest']]);
+            } else {
+                $stmt = $pdo->query($sql);
+            }
+            while ($s = $stmt->fetch()): ?>
+                <div class="col-md-6 mb-3">
+                    <div class="card h-100 shadow-sm">
+                        <div class="card-body">
+                            <h5 class="card-title"><?= htmlspecialchars($s['company_name']) ?> (<?= htmlspecialchars($s['bus_number']) ?>)</h5>
+                            <p class="card-text">
+                                <strong>Njia:</strong> <?= htmlspecialchars($s['departure']) ?> → <?= htmlspecialchars($s['destination']) ?><br>
+                                <strong>Tarehe na Muda:</strong> <?= $s['travel_date'] ?> saa <?= $s['travel_time'] ?><br>
+                                <strong>Bei:</strong> TZS <?= number_format($s['price']) ?>
+                            </p>
+                            <?php if (isset($_SESSION['user_id'])): ?>
+                                <a href="?action=book&schedule_id=<?= $s['id'] ?>" class="btn btn-success btn-sm">Kata Tiketi</a>
+                            <?php else: ?>
+                                <a href="?action=login" class="btn btn-secondary btn-sm">Ingia ili Ukate Tiketi</a>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            <?php endwhile; ?>
+        </div>
+
+    <?php elseif ($action == 'login'): ?>
+        <div class="row justify-content-center">
+            <div class="col-md-4">
+                <div class="card p-4 shadow-sm">
+                    <h4 class="text-center mb-3">Ingia Kwenye Mfumo</h4>
+                    <form method="POST">
+                        <div class="mb-3"><input type="text" name="username" class="form-control" placeholder="Username" required></div>
+                        <div class="mb-3"><input type="password" name="password" class="form-control" placeholder="Password" required></div>
+                        <button type="submit" name="login" class="btn btn-primary w-100">Ingia</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+    <?php elseif ($action == 'register'): ?>
+        <div class="row justify-content-center">
+            <div class="col-md-4">
+                <div class="card p-4 shadow-sm">
+                    <h4 class="text-center mb-3">Sajili Akaunti</h4>
+                    <form method="POST">
+                        <div class="mb-3"><input type="text" name="username" class="form-control" placeholder="Username" required></div>
+                        <div class="mb-3"><input type="password" name="password" class="form-control" placeholder="Password" required></div>
+                        <div class="mb-3"><input type="text" name="phone" class="form-control" placeholder="Namba ya Simu (Mfano: 0712XXXXXX)" required></div>
+                        <div class="mb-3">
+                            <select name="role" class="form-select">
+                                <option value="passenger">Abiria (Passenger)</option>
+                                <option value="agent">Wakala (Agent)</option>
+                            </select>
+                        </div>
+                        <button type="submit" name="register" class="btn btn-success w-100">Sajili</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+    <?php elseif ($action == 'dashboard' && isset($_SESSION['user_id'])): ?>
+        <h4>Dashboard</h4>
+        <div class="row mt-4">
+            <div class="col-md-4"><div class="card bg-primary text-white p-3 mb-3"><h5>Mabasi</h5><p><?= $pdo->query("SELECT COUNT(*) FROM buses")->fetchColumn() ?></p></div></div>
+            <div class="col-md-4"><div class="card bg-success text-white p-3 mb-3"><h5>Njia za Safari</h5><p><?= $pdo->query("SELECT COUNT(*) FROM routes")->fetchColumn() ?></p></div></div>
+            <div class="col-md-4"><div class="card bg-warning text-dark p-3 mb-3"><h5>Tiketi Zilizokatwa</h5><p><?= $pdo->query("SELECT COUNT(*) FROM tickets")->fetchColumn() ?></p></div></div>
+        </div>
+
+    <?php elseif ($action == 'buses' && $_SESSION['role'] == 'admin'): ?>
+        <h4>Usimamizi wa Mabasi</h4>
+        <div class="card p-3 mb-4">
+            <form method="POST" class="row g-2">
+                <div class="col-md-4"><input type="text" name="bus_number" class="form-control" placeholder="Namba ya Basi" required></div>
+                <div class="col-md-4"><input type="text" name="company_name" class="form-control" placeholder="Jina la Kampuni" required></div>
+                <div class="col-md-2"><input type="number" name="total_seats" class="form-control" placeholder="Idadi ya Viti" required></div>
+                <div class="col-md-2"><button type="submit" name="add_bus" class="btn btn-primary w-100">Ongeza</button></div>
+            </form>
+        </div>
+        <table class="table table-bordered bg-white">
+            <thead><tr><th>Namba ya Basi</th><th>Kampuni</th><th>Idadi ya Viti</th><th>Kitendo</th></tr></thead>
+            <tbody>
+                <?php $stmt = $pdo->query("SELECT * FROM buses"); while ($row = $stmt->fetch()): ?>
+                    <tr><td><?= htmlspecialchars($row['bus_number']) ?></td><td><?= htmlspecialchars($row['company_name']) ?></td><td><?= $row['total_seats'] ?></td><td><a href="?action=buses&delete_bus=<?= $row['id'] ?>" class="btn btn-danger btn-sm">Futa</a></td></tr>
+                <?php endwhile; ?>
+            </tbody>
+        </table>
+
+    <?php elseif ($action == 'routes' && $_SESSION['role'] == 'admin'): ?>
+        <h4>Usimamizi wa Njia za Safari</h4>
+        <div class="card p-3 mb-4">
+            <form method="POST" class="row g-2">
+                <div class="col-md-5">
+                    <select name="departure" class="form-select" required>
+                        <option value="">Kutoka (Mkoa)</option>
+                        <?php foreach($mikoa as $m) echo "<option value='$m'>$m</option>"; ?>
+                    </select>
+                </div>
+                <div class="col-md-5">
+                    <select name="destination" class="form-select" required>
+                        <option value="">Kwenda (Mkoa)</option>
+                        <?php foreach($mikoa as $m) echo "<option value='$m'>$m</option>"; ?>
+                    </select>
+                </div>
+                <div class="col-md-2"><button type="submit" name="add_route" class="btn btn-primary w-100">Ongeza</button></div>
+            </form>
+        </div>
+        <table class="table table-bordered bg-white">
+            <thead><tr><th>Kutoka</th><th>Kwenda</th><th>Kitendo</th></tr></thead>
+            <tbody>
+                <?php $stmt = $pdo->query("SELECT * FROM routes"); while ($row = $stmt->fetch()): ?>
+                    <tr><td><?= htmlspecialchars($row['departure']) ?></td><td><?= htmlspecialchars($row['destination']) ?></td><td><a href="?action=routes&delete_route=<?= $row['id'] ?>" class="btn btn-danger btn-sm">Futa</a></td></tr>
+                <?php endwhile; ?>
+            </tbody>
+        </table>
+
+    <?php elseif ($action == 'schedules' && $_SESSION['role'] == 'admin'): ?>
+        <h4>Ratiba za Safari</h4>
+        <div class="card p-3 mb-4">
+            <form method="POST" class="row g-2">
+                <div class="col-md-3">
+                    <select name="bus_id" class="form-select">
+                        <?php $buses = $pdo->query("SELECT * FROM buses"); while ($b = $buses->fetch()) echo "<option value='{$b['id']}'>{$b['company_name']} ({$b['bus_number']})</option>"; ?>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <select name="route_id" class="form-select">
+                        <?php $routes = $pdo->query("SELECT * FROM routes"); while ($r = $routes->fetch()) echo "<option value='{$r['id']}'>{$r['departure']} -> {$r['destination']}</option>"; ?>
+                    </select>
+                </div>
+                <div class="col-md-2"><input type="date" name="travel_date" class="form-control" required></div>
+                <div class="col-md-2"><input type="time" name="travel_time" class="form-control" required></div>
+                <div class="col-md-1"><input type="number" name="price" class="form-control" placeholder="Bei" required></div>
+                <div class="col-md-1"><button type="submit" name="add_schedule" class="btn btn-primary w-100">Weka</button></div>
+            </form>
+        </div>
+        <table class="table table-bordered bg-white">
+            <thead><tr><th>Basi</th><th>Njia</th><th>Tarehe</th><th>Muda</th><th>Bei</th><th>Kitendo</th></tr></thead>
+            <tbody>
+                <?php 
+                $stmt = $pdo->query("SELECT s.*, b.company_name, r.departure, r.destination FROM schedules s JOIN buses b ON s.bus_id = b.id JOIN routes r ON s.route_id = r.id"); 
+                while ($row = $stmt->fetch()): ?>
+                    <tr><td><?= htmlspecialchars($row['company_name']) ?></td><td><?= htmlspecialchars($row['departure']) ?> -> <?= htmlspecialchars($row['destination']) ?></td><td><?= $row['travel_date'] ?></td><td><?= $row['travel_time'] ?></td><td><?= number_format($row['price']) ?></td><td><a href="?action=schedules&delete_schedule=<?= $row['id'] ?>" class="btn btn-danger btn-sm">Futa</a></td></tr>
+                <?php endwhile; ?>
+            </tbody>
+        </table>
+
+    <?php elseif ($action == 'book' && isset($_SESSION['user_id'])): 
+        $sid = $_GET['schedule_id'];
+        $stmt = $pdo->prepare("SELECT s.*, b.company_name, b.total_seats, r.departure, r.destination FROM schedules s JOIN buses b ON s.bus_id = b.id JOIN routes r ON s.route_id = r.id WHERE s.id = ?");
+        $stmt->execute([$sid]);
+        $s = $stmt->fetch();
+        
+        $booked_stmt = $pdo->prepare("SELECT seat_number FROM tickets WHERE schedule_id = ?");
+        $booked_stmt->execute([$sid]);
+        $booked_seats = $booked_stmt->fetchAll(PDO::FETCH_COLUMN);
+        ?>
+        <h4>Kukata Tiketi: <?= htmlspecialchars($s['company_name']) ?></h4>
+        <p><?= htmlspecialchars($s['departure']) ?> kwenda <?= htmlspecialchars($s['destination']) ?> siku ya <?= $s['travel_date'] ?></p>
+        
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card p-3 shadow-sm">
+                    <form method="POST">
+                        <input type="hidden" name="schedule_id" value="<?= $sid ?>">
+                        <div class="mb-3"><input type="text" name="passenger_name" class="form-control" value="<?= htmlspecialchars($_SESSION['username']) ?>" placeholder="Jina Kamili la Abiria" required></div>
+                        <div class="mb-3"><input type="text" name="passenger_phone" class="form-control" value="<?= htmlspecialchars($_SESSION['phone']) ?>" placeholder="Namba ya Simu ya Abiria" required></div>
+                        <div class="mb-3">
+                            <label class="form-label">Chagua Namba ya Kiti</label>
+                            <select name="seat_number" class="form-select" required>
+                                <?php for($i=1; $i<=$s['total_seats']; $i++): if(!in_array($i, $booked_seats)): ?>
+                                    <option value="<?= $i ?>">Kiti Namba <?= $i ?></option>
+                                <?php endif; endfor; ?>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Njia ya Malipo</label>
+                            <select name="payment_method" class="form-select" required>
+                                <option value="M-Pesa">M-Pesa</option>
+                                <option value="Tigo Pesa">Tigo Pesa</option>
+                                <option value="Airtel Money">Airtel Money</option>
+                                <option value="HaloPesa">HaloPesa</option>
+                                <option value="NMB Bank">NMB Bank</option>
+                                <option value="CRDB Bank">CRDB Bank</option>
+                                <option value="NBC Bank">NBC Bank</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Namba ya Muamala (Transaction ID)</label>
+                            <input type="text" name="transaction_id" class="form-control" placeholder="Weka namba ya muamala hapa baada ya kulipa" required>
+                            <small class="text-muted">Lipa kiasi cha TZS <?= number_format($s['price']) ?> kisha weka namba ya kumbukumbu.</small>
+                        </div>
+                        <button type="submit" name="book_ticket" class="btn btn-success w-100">Kamilisha Tiketi</button>
+                    </form>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <h5>Muonekano wa Viti</h5>
+                <div class="d-flex flex-wrap border p-3 bg-white">
+                    <?php for($i=1; $i<=$s['total_seats']; $i++): ?>
+                        <div class="p-2 m-1 text-center text-white <?= in_array($i, $booked_seats) ? 'bg-danger' : 'bg-success' ?>" style="width: 45px; font-size: 12px; border-radius: 4px;">
+                            <?= $i ?>
+                        </div>
+                    <?php endfor; ?>
+                </div>
+                <div class="mt-2">
+                    <span class="badge bg-success">Wazi</span> <span class="badge bg-danger">Imechukuliwa</span>
+                </div>
+            </div>
+        </div>
+
+    <?php elseif ($action == 'reports' && $_SESSION['role'] == 'admin'): ?>
+        <h4>Ripoti ya Mfumo</h4>
+        <div class="row mt-3 mb-4">
+            <div class="col-md-6">
+                <div class="card p-3 bg-dark text-white">
+                    <h5>Jumla ya Mapato (Tiketi Zilizolipwa)</h5>
+                    <h3>TZS <?php 
+                        $total = $pdo->query("SELECT SUM(s.price) FROM tickets t JOIN schedules s ON t.schedule_id = s.id WHERE t.payment_status = 'Paid'")->fetchColumn();
+                        echo number_format($total ? $total : 0);
+                    ?></h3>
+                </div>
+            </div>
+        </div>
+        <h5>Orodha ya Tiketi Zote zilizouzwa</h5>
+        <table class="table table-bordered bg-white">
+            <thead><tr><th>Namba ya Tiketi</th><th>Abiria</th><th>Simu</th><th>Basi</th><th>Kiti</th><th>Njia ya Malipo</th><th>Kumbukumbu ya Muamala</th><th>Hali</th></tr></thead>
+            <tbody>
+                <?php 
+                $stmt = $pdo->query("SELECT t.*, b.company_name FROM tickets t JOIN schedules s ON t.schedule_id = s.id JOIN buses b ON s.bus_id = b.id"); 
+                while ($row = $stmt->fetch()): ?>
+                    <tr><td><?= $row['ticket_number'] ?></td><td><?= htmlspecialchars($row['passenger_name']) ?></td><td><?= htmlspecialchars($row['passenger_phone']) ?></td><td><?= htmlspecialchars($row['company_name']) ?></td><td><?= $row['seat_number'] ?></td><td><?= htmlspecialchars($row['payment_method']) ?></td><td><?= htmlspecialchars($row['transaction_id']) ?></td><td><span class="badge <?= $row['payment_status'] == 'Paid' ? 'bg-success' : 'bg-warning' ?>"><?= $row['payment_status'] ?></span></td></tr>
+                <?php endwhile; ?>
+            </tbody>
+        </table>
+    <?php endif; ?>
+</div>
+</body>
+</html>
+
