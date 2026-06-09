@@ -1,3 +1,6 @@
+ZAKAYO TIMOTH KAPESA
+14325125/T.24
+MICT EDU 2
 Ticket Booking System
 The Ticket Booking System is a web-based application developed to simplify and automate the process of booking travel tickets online. The system allows passengers to create accounts, log in, view available buses and travel schedules, select seats, and book tickets conveniently from anywhere. It provides a user-friendly interface that makes the booking process fast, easy, and efficient.
 The system also includes an administrator panel that enables administrators to manage buses, routes, schedules, passengers, and booking records. By digitizing the ticket booking process, the system reduces paperwork, minimizes booking errors, improves record management, and enhances customer satisfaction.
